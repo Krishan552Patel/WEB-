@@ -1,0 +1,41 @@
+/* TopSearchBar.css */
+.top-search-bar {
+    margin-bottom: 20px;
+    width: 100%;
+  }
+  
+  .top-search-bar form {
+    display: flex;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+  
+  .top-search-bar input {
+    flex: 1;
+    padding: 12px 15px;
+    border: 2px solid var(--primary);
+    background-color: var(--secondary-light);
+    color: var(--text-light);
+    border-radius: 4px 0 0 4px;
+    font-size: 16px;
+  }
+  
+  .top-search-bar input:focus {
+    outline: none;
+    border-color: var(--primary-light);
+  }
+  
+  .top-search-bar button {
+    padding: 12px 20px;
+    background-color: var(--primary);
+    color: white;
+    border: none;
+    border-radius: 0 4px 4px 0;
+    cursor: pointer;
+    font-size: 16px;
+    transition: background-color 0.2s;
+  }
+  
+  .top-search-bar button:hover {
+    background-color: var(--primary-dark);
+  }
