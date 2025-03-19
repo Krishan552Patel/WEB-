@@ -16,16 +16,26 @@ const FilterSidebar = ({ onFilterChange }) => {
     pitch: searchParams.get('pitch') || ''
   });
   
-  // Fetch card types for dropdown
+  // Load card types
   useEffect(() => {
-    // We'll simulate fetching card types, but in a real app 
-    // you would fetch this from your API
     setCardTypes([
       'Illusionist', 'Mystic', 'Wizard', 'Brute', 'Guardian', 
       'Ninja', 'Warrior', 'Ranger', 'Mechanologist', 'Runeblade'
     ]);
     setLoading(false);
   }, []);
+  
+  // Reset filters based on URL parameters when they change
+  useEffect(() => {
+    setFilters({
+      cardClass: searchParams.get('cardClass') || '',
+      cardType: searchParams.get('cardType') || '',
+      rarity: searchParams.get('rarity') || '',
+      minCost: searchParams.get('minCost') || '',
+      maxCost: searchParams.get('maxCost') || '',
+      pitch: searchParams.get('pitch') || ''
+    });
+  }, [searchParams]);
   
   // Handle filter changes
   const handleFilterChange = (e) => {

@@ -56,18 +56,23 @@ function HomePage() {
   const [error, setError] = useState(null);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
-  
-  const API_URL = 'http://localhost:3001/api';
+  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   
   useEffect(() => {
     fetchCards(page);
-  }, [page]);
+  }, [page, searchParams]);
   
   const fetchCards = (pageNum) => {
     setIsLoading(true);
     
-    // Increased limit to show more cards per page
-    fetch(`${API_URL}/cards?page=${pageNum}&limit=12`)
+    // Get all search parameters
+    const params = new URLSearchParams(searchParams);
+    params.set('page', pageNum);
+    params.set('limit', '24'); // Show more cards per page
+    
+    fetch(`${API_URL}/cards/search?${params.toString()}`)
       .then(response => {
         if (!response.ok) {
           throw new Error('Network response was not ok');
@@ -88,9 +93,26 @@ function HomePage() {
   const handlePageChange = (newPage) => {
     if (newPage >= 1 && newPage <= totalPages) {
       setPage(newPage);
-      // Scroll to top when changing pages
       window.scrollTo(0, 0);
     }
+  };
+  
+  const handleFilterChange = (filters) => {
+    const newParams = new URLSearchParams();
+    
+    // Add all filters
+    for (const [key, value] of Object.entries(filters)) {
+      newParams.set(key, value);
+    }
+    
+    // Reset to page 1
+    newParams.set('page', '1');
+    
+    setSearchParams(newParams);
+  };
+  
+  const toggleSidebar = () => {
+    setSidebarVisible(!sidebarVisible);
   };
   
   if (isLoading && page === 1) return <div className="loading">Loading...</div>;
@@ -101,60 +123,47 @@ function HomePage() {
       <section className="welcome-section">
         <h2>Welcome to the Trading Card Store</h2>
         <p>Discover rare cards, build your collection, and dominate the game</p>
-        
       </section>
       
-      <section className="featured-categories">
-        <h2>Shop by Category</h2>
-        <div className="category-grid">
-          <Link to="/search?type=Warrior" className="category-card">
-            <div className="category-icon">⚔️</div>
-            <h3>Warrior</h3>
-          </Link>
-          <Link to="/search?type=Wizard" className="category-card">
-            <div className="category-icon">🧙</div>
-            <h3>Wizard</h3>
-          </Link>
-          <Link to="/search?type=Guardian" className="category-card">
-            <div className="category-icon">🛡️</div>
-            <h3>Guardian</h3>
-          </Link>
-          <Link to="/search?type=Ninja" className="category-card">
-            <div className="category-icon">🥷</div>
-            <h3>Ninja</h3>
-          </Link>
-        </div>
-      </section>
+      <button className="sidebar-toggle" onClick={toggleSidebar}>
+        {sidebarVisible ? 'Hide Filters' : 'Show Filters'}
+      </button>
       
-      <section className="all-cards">
-        <div className="section-header">
-          <h2>Browse Our Collection</h2>
-          <p>Page {page} of {totalPages}</p>
-        </div>
+      <div className="search-layout">
+        {sidebarVisible && (
+          <FilterSidebar onFilterChange={handleFilterChange} />
+        )}
         
-        {isLoading ? (
-          <div className="loading">Loading page {page}...</div>
-        ) : (
-          <>
-            <div className="card-grid">
-              {cards.map(card => (
-                <CardPreview key={card.card_id} card={card} />
-              ))}
+        <div className="search-main">
+          <section className="all-cards">
+            <div className="section-header">
+              <h2>Browse Our Collection</h2>
+              <p>Page {page} of {totalPages}</p>
             </div>
             
-            <Pagination 
-              currentPage={page} 
-              totalPages={totalPages} 
-              onPageChange={handlePageChange}
-            />
-          </>
-        )}
-      </section>
+            {isLoading ? (
+              <div className="loading">Loading page {page}...</div>
+            ) : (
+              <>
+                <div className="card-grid">
+                  {cards.map(card => (
+                    <CardPreview key={card.card_id} card={card} />
+                  ))}
+                </div>
+                
+                <Pagination 
+                  currentPage={page} 
+                  totalPages={totalPages} 
+                  onPageChange={handlePageChange}
+                />
+              </>
+            )}
+          </section>
+        </div>
+      </div>
     </div>
   );
 }
-
-
 function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -375,6 +384,45 @@ function SearchPage() {
 // Card Preview Component
 function CardPreview({ card }) {
   const [inCart, setInCart] = useState(false);
+  const [addedToCollection, setAddedToCollection] = useState(false);
+  const [inventory, setInventory] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [stockError, setStockError] = useState(null);
+  const [collectionError, setCollectionError] = useState(null);
+  
+  useEffect(() => {
+    // Find the first printing ID for this card
+    if (card.image_url) {
+      const printingId = card.image_url.split('/').pop().split('.')[0];
+      if (printingId) {
+        // Fetch inventory for this printing
+        fetch(`${API_URL}/inventory/check/${printingId}`)
+          .then(response => {
+            if (!response.ok) {
+              if (response.status === 404) {
+                setInventory({ in_stock: false, available: 0 });
+                return null;
+              }
+              throw new Error('Error checking inventory');
+            }
+            return response.json();
+          })
+          .then(data => {
+            if (data) setInventory(data);
+            setIsLoading(false);
+          })
+          .catch(error => {
+            console.error('Inventory check error:', error);
+            setInventory({ in_stock: false, available: 0 });
+            setIsLoading(false);
+          });
+      } else {
+        setIsLoading(false);
+      }
+    } else {
+      setIsLoading(false);
+    }
+  }, [card]);
   
   // Determine background color based on pitch value
   const getCardColor = (pitch) => {
@@ -395,13 +443,78 @@ function CardPreview({ card }) {
   
   const handleAddToCart = (e) => {
     e.preventDefault(); // Prevent navigation to card detail
+    
+    if (!inventory || !inventory.in_stock) {
+      setStockError('Out of stock');
+      return;
+    }
+    
+    // In a real app, we would call the API to update inventory
+    // Here we're just simulating success
     setInCart(true);
     
     // Show feedback
-    setTimeout(() => setInCart(false), 1500);
+    setTimeout(() => {
+      setInCart(false);
+      setStockError(null);
+    }, 1500);
+  };
+  
+  const handleAddToCollection = (e) => {
+    e.preventDefault(); // Prevent navigation to card detail
+    
+    // Get printing ID from image URL
+    if (!card.image_url) {
+      setCollectionError('Cannot add to collection');
+      return;
+    }
+    
+    const printingId = card.image_url.split('/').pop().split('.')[0];
+    if (!printingId) {
+      setCollectionError('Cannot add to collection');
+      return;
+    }
+    
+    const price = parseFloat(getPrice());
+    
+    // Call the collection add API
+    fetch(`${API_URL}/collection/add`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        user_id: 1, // Using a default user ID, in a real app you'd get this from auth
+        card_id: card.card_id,
+        printing_id: printingId,
+        quantity: 1, // Add 1 by default in the preview
+        condition: 'Near Mint',
+        purchase_price: price
+      })
+    })
+    .then(response => {
+      if (!response.ok) {
+        return response.json().then(data => {
+          throw new Error(data.error || 'Error adding to collection');
+        });
+      }
+      return response.json();
+    })
+    .then(data => {
+      // Update was successful
+      setAddedToCollection(true);
+      setTimeout(() => setAddedToCollection(false), 1500);
+      setCollectionError(null);
+    })
+    .catch(error => {
+      console.error('Collection error:', error);
+      setCollectionError('Error adding to collection');
+      setTimeout(() => setCollectionError(null), 3000);
+    });
   };
   
   const price = getPrice();
+  const isInStock = inventory && inventory.in_stock;
   
   return (
     <div className={`card-preview ${getCardColor(card.pitch)}`}>
@@ -415,28 +528,69 @@ function CardPreview({ card }) {
             <span className="cost">Cost: {card.cost}</span>
           </div>
           <div className="card-price">${price}</div>
+          
+          <div className="stock-status-small">
+            {isLoading ? (
+              <span className="stock-loading">Checking...</span>
+            ) : isInStock ? (
+              <span className="in-stock-small">In Stock</span>
+            ) : (
+              <span className="out-of-stock-small">Out of Stock</span>
+            )}
+          </div>
         </div>
       </Link>
-      <button 
-        className="add-to-cart-btn" 
-        onClick={handleAddToCart}
-        disabled={inCart}
-      >
-        {inCart ? 'Added to Cart!' : 'Add to Cart'}
-      </button>
+      
+      {stockError && (
+        <div className="stock-error-small">{stockError}</div>
+      )}
+      
+      {collectionError && (
+        <div className="stock-error-small">{collectionError}</div>
+      )}
+      
+      <div className="preview-buttons">
+        <button 
+          className="add-to-cart-btn" 
+          onClick={handleAddToCart}
+          disabled={inCart || isLoading || !isInStock}
+        >
+          {inCart ? 'Added!' : isLoading ? 'Loading...' : isInStock ? 'Add to Cart' : 'Out of Stock'}
+        </button>
+        
+        <button 
+          className="add-to-collection-btn-small" 
+          onClick={handleAddToCollection}
+          disabled={addedToCollection}
+        >
+          {addedToCollection ? 'In Collection' : '+Collection'}
+        </button>
+      </div>
     </div>
   );
 }
-// Card Detail Page Component
+
+// Add this inside your CardDetailPage component
+const getCardColor = (pitch) => {
+  switch(pitch) {
+    case '1': return 'red-card';
+    case '2': return 'yellow-card';
+    case '3': return 'blue-card';
+    default: return 'grey-card';
+  }
+};
 // Card Detail with Store Features
 function CardDetailPage() {
   const { cardId } = useParams();
   const [card, setCard] = useState(null);
   const [selectedPrinting, setSelectedPrinting] = useState(null);
+  const [inventory, setInventory] = useState(null);
   const [quantity, setQuantity] = useState(1);
   const [inCart, setInCart] = useState(false);
+  const [addedToCollection, setAddedToCollection] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [stockError, setStockError] = useState(null);
   
   useEffect(() => {
     fetch(`${API_URL}/cards/${cardId}`)
@@ -450,6 +604,8 @@ function CardDetailPage() {
         setCard(data);
         if (data.printings && data.printings.length > 0) {
           setSelectedPrinting(data.printings[0]);
+          // Fetch inventory for the first printing
+          fetchInventory(data.printings[0].printing_id);
         }
         setIsLoading(false);
       })
@@ -459,8 +615,34 @@ function CardDetailPage() {
       });
   }, [cardId]);
   
+  const fetchInventory = (printingId) => {
+    fetch(`${API_URL}/inventory/printing/${printingId}`)
+      .then(response => {
+        if (!response.ok) {
+          if (response.status === 404) {
+            // Not found is expected for some printings
+            setInventory({ stock_quantity: 0 });
+            return;
+          }
+          throw new Error('Error fetching inventory');
+        }
+        return response.json();
+      })
+      .then(data => {
+        if (data) setInventory(data);
+      })
+      .catch(error => {
+        console.error('Inventory fetch error:', error);
+        // Default to zero if we can't get inventory
+        setInventory({ stock_quantity: 0 });
+      });
+  };
+  
   const handlePrintingSelect = (printing) => {
     setSelectedPrinting(printing);
+    fetchInventory(printing.printing_id);
+    setStockError(null); // Clear any previous errors
+    setAddedToCollection(false); // Reset collection status
   };
   
   // Generate price based on card properties
@@ -487,8 +669,89 @@ function CardDetailPage() {
   };
   
   const handleAddToCart = () => {
-    setInCart(true);
-    setTimeout(() => setInCart(false), 1500);
+    if (!selectedPrinting) return;
+    
+    // Check if we have enough stock
+    if (!inventory || inventory.stock_quantity < quantity) {
+      setStockError(`Sorry, only ${inventory ? inventory.stock_quantity : 0} in stock`);
+      return;
+    }
+    
+    // Call the inventory update API
+    fetch(`${API_URL}/inventory/update`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        printing_id: selectedPrinting.printing_id,
+        quantity: quantity
+      })
+    })
+    .then(response => {
+      if (!response.ok) {
+        return response.json().then(data => {
+          throw new Error(data.error || 'Error updating inventory');
+        });
+      }
+      return response.json();
+    })
+    .then(data => {
+      // Update was successful
+      setInCart(true);
+      
+      // Update local inventory state
+      setInventory({
+        ...inventory,
+        stock_quantity: data.new_stock
+      });
+      
+      setTimeout(() => setInCart(false), 1500);
+      setStockError(null);
+    })
+    .catch(error => {
+      console.error('Update error:', error);
+      setStockError(error.message);
+    });
+  };
+  
+  const handleAddToCollection = () => {
+    if (!selectedPrinting || !card) return;
+    
+    const price = parseFloat(getPrice());
+    
+    // Call the collection add API
+    fetch(`${API_URL}/collection/add`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        user_id: 1, // Using a default user ID, in a real app you'd get this from auth
+        card_id: card.card_id,
+        printing_id: selectedPrinting.printing_id,
+        quantity: quantity,
+        condition: 'Near Mint',
+        purchase_price: price
+      })
+    })
+    .then(response => {
+      if (!response.ok) {
+        return response.json().then(data => {
+          throw new Error(data.error || 'Error adding to collection');
+        });
+      }
+      return response.json();
+    })
+    .then(data => {
+      // Update was successful
+      setAddedToCollection(true);
+      setTimeout(() => setAddedToCollection(false), 1500);
+    })
+    .catch(error => {
+      console.error('Collection error:', error);
+      alert('Error adding to collection: ' + error.message);
+    });
   };
   
   // Determine background color based on pitch value
@@ -500,6 +763,10 @@ function CardDetailPage() {
       default: return 'grey-card';
     }
   };
+  
+  // Check if item is in stock
+  const isInStock = inventory && inventory.stock_quantity > 0;
+  const hasEnoughStock = inventory && inventory.stock_quantity >= quantity;
   
   if (isLoading) return <div className="loading">Loading...</div>;
   if (error) return <div className="error">Error: {error}</div>;
@@ -542,22 +809,57 @@ function CardDetailPage() {
               {parseFloat(price) >= 10 && <p className="free-shipping">Free shipping eligible!</p>}
             </div>
             
+            <div className="stock-status">
+              {isInStock ? (
+                <p className="in-stock">
+                  <span className="stock-icon">✓</span> In Stock
+                  {inventory && <span className="stock-count"> ({inventory.stock_quantity} available)</span>}
+                </p>
+              ) : (
+                <p className="out-of-stock">
+                  <span className="stock-icon">✗</span> Out of Stock
+                </p>
+              )}
+            </div>
+            
             <div className="quantity-selector">
               <label>Quantity:</label>
               <div className="quantity-control">
-                <button onClick={() => setQuantity(Math.max(1, quantity - 1))}>-</button>
+                <button 
+                  onClick={() => setQuantity(Math.max(1, quantity - 1))}
+                  disabled={!isInStock}
+                >-</button>
                 <span>{quantity}</span>
-                <button onClick={() => setQuantity(quantity + 1)}>+</button>
+                <button 
+                  onClick={() => setQuantity(quantity + 1)}
+                  disabled={!isInStock || (inventory && quantity >= inventory.stock_quantity)}
+                >+</button>
               </div>
             </div>
             
-            <button 
-              className="add-to-cart-btn" 
-              onClick={handleAddToCart}
-              disabled={inCart}
-            >
-              {inCart ? 'Added to Cart!' : 'Add to Cart'}
-            </button>
+            {stockError && (
+              <div className="stock-error">
+                {stockError}
+              </div>
+            )}
+            
+            <div className="action-buttons">
+              <button 
+                className="add-to-cart-btn" 
+                onClick={handleAddToCart}
+                disabled={inCart || !isInStock || !hasEnoughStock}
+              >
+                {inCart ? 'Added to Cart!' : isInStock ? 'Add to Cart' : 'Out of Stock'}
+              </button>
+              
+              <button 
+                className="add-to-collection-btn" 
+                onClick={handleAddToCollection}
+                disabled={addedToCollection}
+              >
+                {addedToCollection ? 'Added to Collection!' : 'Add to My Collection'}
+              </button>
+            </div>
           </div>
         </div>
         
@@ -625,15 +927,31 @@ function CardDetailPage() {
     </div>
   );
 }
-
 // Inventory Page Component
 function InventoryPage() {
   const { userId } = useParams();
   const [inventory, setInventory] = useState([]);
+  const [filteredInventory, setFilteredInventory] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [activeFilters, setActiveFilters] = useState({});
+  const [breakdown, setBreakdown] = useState({ byRarity: {}, byType: {}, byPitch: {} });
   
   useEffect(() => {
+    fetchInventory();
+  }, [userId]);
+  
+  useEffect(() => {
+    if (inventory.length > 0) {
+      applyFilters();
+      calculateBreakdown();
+    }
+  }, [inventory, activeFilters]);
+  
+  const fetchInventory = () => {
+    setIsLoading(true);
+    
     fetch(`${API_URL}/inventory/${userId}`)
       .then(response => {
         if (!response.ok) {
@@ -642,79 +960,274 @@ function InventoryPage() {
         return response.json();
       })
       .then(data => {
-        setInventory(data);
+        // Enhance each item with additional data
+        const enhancedData = data.map(item => ({
+          ...item,
+          total_value: item.purchase_price * item.quantity,
+          pitch_class: getPitchClass(item.pitch)
+        }));
+        
+        setInventory(enhancedData);
+        setFilteredInventory(enhancedData);
         setIsLoading(false);
       })
       .catch(error => {
         setError(error.message);
         setIsLoading(false);
       });
-  }, [userId]);
+  };
   
-  if (isLoading) return <div className="loading">Loading...</div>;
+  const getPitchClass = (pitch) => {
+    switch(pitch) {
+      case '1': return 'red';
+      case '2': return 'yellow';
+      case '3': return 'blue';
+      default: return 'grey';
+    }
+  };
+  
+  const applyFilters = () => {
+    let filtered = [...inventory];
+    
+    // Apply active filters
+    if (activeFilters.cardClass) {
+      filtered = filtered.filter(item => 
+        item.type_text && item.type_text.includes(activeFilters.cardClass)
+      );
+    }
+    
+    if (activeFilters.cardType) {
+      filtered = filtered.filter(item => 
+        item.type_text && item.type_text.includes(activeFilters.cardType)
+      );
+    }
+    
+    if (activeFilters.rarity) {
+      filtered = filtered.filter(item => 
+        item.rarity === activeFilters.rarity
+      );
+    }
+    
+    if (activeFilters.pitch) {
+      filtered = filtered.filter(item => 
+        item.pitch === activeFilters.pitch
+      );
+    }
+    
+    if (activeFilters.minCost) {
+      filtered = filtered.filter(item => 
+        parseInt(item.cost || 0) >= parseInt(activeFilters.minCost)
+      );
+    }
+    
+    if (activeFilters.maxCost) {
+      filtered = filtered.filter(item => 
+        parseInt(item.cost || 0) <= parseInt(activeFilters.maxCost)
+      );
+    }
+    
+    setFilteredInventory(filtered);
+  };
+  
+  const calculateBreakdown = () => {
+    const byRarity = {};
+    const byType = {};
+    const byPitch = {};
+    
+    // Only calculate breakdowns on the filtered inventory
+    filteredInventory.forEach(item => {
+      // Breakdown by rarity
+      byRarity[item.rarity] = byRarity[item.rarity] || { count: 0, value: 0 };
+      byRarity[item.rarity].count += item.quantity;
+      byRarity[item.rarity].value += item.total_value;
+      
+      // Breakdown by card type (use main type)
+      const mainType = item.type_text ? item.type_text.split(' ')[0] : 'Unknown';
+      byType[mainType] = byType[mainType] || { count: 0, value: 0 };
+      byType[mainType].count += item.quantity;
+      byType[mainType].value += item.total_value;
+      
+      // Breakdown by pitch
+      const pitchKey = item.pitch || 'Unknown';
+      byPitch[pitchKey] = byPitch[pitchKey] || { count: 0, value: 0 };
+      byPitch[pitchKey].count += item.quantity;
+      byPitch[pitchKey].value += item.total_value;
+    });
+    
+    setBreakdown({ byRarity, byType, byPitch });
+  };
+  
+  const handleFilterChange = (filters) => {
+    setActiveFilters(filters);
+  };
+  
+  const toggleSidebar = () => {
+    setSidebarVisible(!sidebarVisible);
+  };
+  
+  if (isLoading) return <div className="loading">Loading your collection...</div>;
   if (error) return <div className="error">Error: {error}</div>;
   
-  // Calculate total cards and value
-  const totalCards = inventory.reduce((sum, item) => sum + item.quantity, 0);
-  const totalValue = inventory.reduce((sum, item) => sum + (item.purchase_price * item.quantity), 0);
+  // Calculate collection stats
+  const totalCards = filteredInventory.reduce((sum, item) => sum + item.quantity, 0);
+  const totalValue = filteredInventory.reduce((sum, item) => sum + item.total_value, 0);
+  const uniqueCards = filteredInventory.length;
   
   return (
     <div className="inventory-page">
-      <h2>My Card Inventory</h2>
+      <h2>My Card Collection</h2>
       
-      <div className="inventory-stats">
-        <div className="stat-box">
-          <h3>{inventory.length}</h3>
-          <p>Unique Cards</p>
-        </div>
-        <div className="stat-box">
-          <h3>{totalCards}</h3>
-          <p>Total Cards</p>
-        </div>
-        <div className="stat-box">
-          <h3>${totalValue.toFixed(2)}</h3>
-          <p>Collection Value</p>
+      <button className="sidebar-toggle" onClick={toggleSidebar}>
+        {sidebarVisible ? 'Hide Filters' : 'Show Filters'}
+      </button>
+      
+      <div className="search-layout">
+        {sidebarVisible && (
+          <FilterSidebar onFilterChange={handleFilterChange} />
+        )}
+        
+        <div className="inventory-main">
+          <div className="inventory-stats">
+            <div className="stat-box">
+              <h3>{uniqueCards}</h3>
+              <p>Unique Cards</p>
+            </div>
+            <div className="stat-box">
+              <h3>{totalCards}</h3>
+              <p>Total Cards</p>
+            </div>
+            <div className="stat-box">
+              <h3>${totalValue.toFixed(2)}</h3>
+              <p>Collection Value</p>
+            </div>
+          </div>
+          
+          {/* Collection Breakdowns */}
+          <div className="collection-breakdowns">
+            <div className="breakdown-section">
+              <h3>Collection Breakdown</h3>
+              
+              <div className="breakdown-tabs">
+                <div className="breakdown-tab">
+                  <h4>By Rarity</h4>
+                  <table className="breakdown-table">
+                    <thead>
+                      <tr>
+                        <th>Rarity</th>
+                        <th>Count</th>
+                        <th>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(breakdown.byRarity).map(([rarity, data]) => (
+                        <tr key={`rarity-${rarity}`}>
+                          <td>{rarity || 'Unknown'}</td>
+                          <td>{data.count}</td>
+                          <td>${data.value.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                
+                <div className="breakdown-tab">
+                  <h4>By Card Type</h4>
+                  <table className="breakdown-table">
+                    <thead>
+                      <tr>
+                        <th>Type</th>
+                        <th>Count</th>
+                        <th>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(breakdown.byType).map(([type, data]) => (
+                        <tr key={`type-${type}`}>
+                          <td>{type}</td>
+                          <td>{data.count}</td>
+                          <td>${data.value.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                
+                <div className="breakdown-tab">
+                  <h4>By Pitch Value</h4>
+                  <table className="breakdown-table">
+                    <thead>
+                      <tr>
+                        <th>Pitch</th>
+                        <th>Count</th>
+                        <th>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(breakdown.byPitch).map(([pitch, data]) => (
+                        <tr key={`pitch-${pitch}`} className={`pitch-${pitch.toLowerCase()}-row`}>
+                          <td>{pitch}</td>
+                          <td>{data.count}</td>
+                          <td>${data.value.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          {/* Card Inventory Table */}
+          {filteredInventory.length > 0 ? (
+            <div className="inventory-table">
+              <h3>Card Inventory {activeFilters && Object.keys(activeFilters).length > 0 && '(Filtered)'}</h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Card</th>
+                    <th>Set</th>
+                    <th>Foiling</th>
+                    <th>Quantity</th>
+                    <th>Condition</th>
+                    <th>Price</th>
+                    <th>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredInventory.map(item => (
+                    <tr key={item.inventory_id} className={`pitch-${item.pitch_class}-bg`}>
+                      <td>
+                        <Link to={`/card/${item.card_id}`} className="inventory-card-name">
+                          {item.card_name}
+                        </Link>
+                      </td>
+                      <td>{item.set_id}</td>
+                      <td>{item.foiling}</td>
+                      <td>{item.quantity}</td>
+                      <td>{item.condition}</td>
+                      <td>${parseFloat(item.purchase_price).toFixed(2)}</td>
+                      <td>${item.total_value.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colSpan="6" className="total-row">Total Value:</td>
+                    <td className="total-value">${totalValue.toFixed(2)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          ) : (
+            <div className="empty-inventory">
+              {inventory.length > 0 ? 
+                <p>No cards match your current filters.</p> : 
+                <p>Your inventory is empty. Add some cards!</p>
+              }
+            </div>
+          )}
         </div>
       </div>
-      
-      {inventory.length > 0 ? (
-        <div className="inventory-table">
-          <table>
-            <thead>
-              <tr>
-                <th>Card</th>
-                <th>Set</th>
-                <th>Foiling</th>
-                <th>Quantity</th>
-                <th>Condition</th>
-                <th>Price</th>
-                <th>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {inventory.map(item => (
-                <tr key={item.inventory_id}>
-                  <td>
-                    <Link to={`/card/${item.card_id}`} className="inventory-card-name">
-                      {item.card_name}
-                    </Link>
-                  </td>
-                  <td>{item.set_id}</td>
-                  <td>{item.foiling}</td>
-                  <td>{item.quantity}</td>
-                  <td>{item.condition}</td>
-                  <td>${parseFloat(item.purchase_price).toFixed(2)}</td>
-                  <td>${(item.purchase_price * item.quantity).toFixed(2)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div className="empty-inventory">
-          <p>Your inventory is empty. Add some cards!</p>
-        </div>
-      )}
     </div>
   );
 }

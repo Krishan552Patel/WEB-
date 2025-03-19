@@ -338,29 +338,291 @@ app.get('/api/cards/:id', (req, res) => {
 });
 
 // API endpoint to get user inventory
+// Enhanced inventory endpoints for the backend
+
+// Get user inventory with additional card details
 app.get('/api/inventory/:userId', (req, res) => {
-  const userId = req.params.userId;
+    const userId = req.params.userId;
+    
+    const sql = `
+      SELECT ui.inventory_id, ui.card_id, ui.printing_id, ui.quantity, ui.condition, ui.purchase_price,
+             c.name as card_name, c.pitch, c.type_text, c.cost,
+             p.set_id, p.edition, p.foiling, p.rarity, p.image_url
+      FROM UserInventory ui
+      JOIN Cards c ON ui.card_id = c.card_id
+      JOIN Printings p ON ui.printing_id = p.printing_id
+      WHERE ui.user_id = ?
+      ORDER BY c.name
+    `;
+    
+    db.all(sql, [userId], (err, rows) => {
+      if (err) {
+        res.status(500).json({ error: err.message });
+        return;
+      }
+      
+      res.json(rows);
+    });
+  });
   
-  const sql = `
-    SELECT ui.inventory_id, ui.card_id, ui.printing_id, ui.quantity, ui.condition, ui.purchase_price,
-           c.name as card_name, c.pitch, c.type_text,
-           p.set_id, p.edition, p.foiling, p.rarity, p.image_url
-    FROM UserInventory ui
-    JOIN Cards c ON ui.card_id = c.card_id
-    JOIN Printings p ON ui.printing_id = p.printing_id
-    WHERE ui.user_id = ?
-    ORDER BY c.name
-  `;
-  
-  db.all(sql, [userId], (err, rows) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-      return;
+  // Get inventory breakdowns/statistics
+  app.get('/api/inventory/:userId/stats', (req, res) => {
+    const userId = req.params.userId;
+    
+    // Get count and value by rarity
+    const rarityQuery = `
+      SELECT p.rarity, 
+             COUNT(ui.inventory_id) as unique_cards,
+             SUM(ui.quantity) as total_cards,
+             SUM(ui.quantity * ui.purchase_price) as total_value
+      FROM UserInventory ui
+      JOIN Printings p ON ui.printing_id = p.printing_id
+      WHERE ui.user_id = ?
+      GROUP BY p.rarity
+    `;
+    
+    // Get count and value by card type
+    const typeQuery = `
+      SELECT 
+          CASE 
+              WHEN instr(c.type_text, ' ') > 0 
+              THEN substr(c.type_text, 1, instr(c.type_text, ' ')-1) 
+              ELSE c.type_text 
+          END as card_type,
+          COUNT(ui.inventory_id) as unique_cards,
+          SUM(ui.quantity) as total_cards,
+          SUM(ui.quantity * ui.purchase_price) as total_value
+      FROM UserInventory ui
+      JOIN Cards c ON ui.card_id = c.card_id
+      WHERE ui.user_id = ?
+      GROUP BY card_type
+    `;
+    
+    // Get count and value by pitch
+    const pitchQuery = `
+      SELECT c.pitch, 
+             COUNT(ui.inventory_id) as unique_cards,
+             SUM(ui.quantity) as total_cards,
+             SUM(ui.quantity * ui.purchase_price) as total_value
+      FROM UserInventory ui
+      JOIN Cards c ON ui.card_id = c.card_id
+      WHERE ui.user_id = ?
+      GROUP BY c.pitch
+    `;
+    
+    // Execute all queries
+    db.all(rarityQuery, [userId], (err, rarityStats) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      db.all(typeQuery, [userId], (err, typeStats) => {
+        if (err) {
+          return res.status(500).json({ error: err.message });
+        }
+        
+        db.all(pitchQuery, [userId], (err, pitchStats) => {
+          if (err) {
+            return res.status(500).json({ error: err.message });
+          }
+          
+          // Return all stats
+          res.json({
+            byRarity: rarityStats,
+            byType: typeStats,
+            byPitch: pitchStats
+          });
+        });
+      });
+    });
+  });
+// Add this to your backend app.js
+
+// Add card to user collection
+app.post('/api/collection/add', (req, res) => {
+    const { user_id, card_id, printing_id, quantity, condition, purchase_price } = req.body;
+    
+    if (!user_id || !card_id || !printing_id || !quantity) {
+      return res.status(400).json({ error: 'Missing required fields' });
     }
     
-    res.json(rows);
+    // Check if this card/printing already exists in user's collection
+    db.get(`
+      SELECT inventory_id, quantity 
+      FROM UserInventory 
+      WHERE user_id = ? AND card_id = ? AND printing_id = ?
+    `, [user_id, card_id, printing_id], (err, existing) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      if (existing) {
+        // Update existing entry
+        const newQuantity = existing.quantity + quantity;
+        
+        db.run(`
+          UPDATE UserInventory 
+          SET quantity = ?, 
+              condition = COALESCE(?, condition),
+              purchase_price = COALESCE(?, purchase_price),
+              date_acquired = datetime('now')
+          WHERE inventory_id = ?
+        `, [newQuantity, condition, purchase_price, existing.inventory_id], function(err) {
+          if (err) {
+            return res.status(500).json({ error: err.message });
+          }
+          
+          res.json({
+            success: true,
+            message: 'Card quantity updated in collection',
+            inventory_id: existing.inventory_id,
+            new_quantity: newQuantity
+          });
+        });
+      } else {
+        // Create new entry
+        db.run(`
+          INSERT INTO UserInventory (user_id, card_id, printing_id, quantity, condition, purchase_price, date_acquired)
+          VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+        `, [user_id, card_id, printing_id, quantity, condition || 'Near Mint', purchase_price || 0], function(err) {
+          if (err) {
+            return res.status(500).json({ error: err.message });
+          }
+          
+          res.json({
+            success: true,
+            message: 'Card added to collection',
+            inventory_id: this.lastID
+          });
+        });
+      }
+    });
   });
-});
+app.get('/api/inventory/printing/:printingId', (req, res) => {
+    const printingId = req.params.printingId;
+    
+    db.get(`
+      SELECT pi.inventory_id, pi.printing_id, pi.stock_quantity, pi.last_updated,
+             p.set_id, p.edition, p.foiling, p.rarity,
+             c.name as card_name
+      FROM ProductInventory pi
+      JOIN Printings p ON pi.printing_id = p.printing_id
+      JOIN Cards c ON p.card_id = c.card_id
+      WHERE pi.printing_id = ?
+    `, [printingId], (err, inventory) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      if (!inventory) {
+        return res.status(404).json({ error: 'Inventory not found' });
+      }
+      
+      res.json(inventory);
+    });
+  });
+  
+  // Check if item is in stock
+  app.get('/api/inventory/check/:printingId', (req, res) => {
+    const printingId = req.params.printingId;
+    const quantity = parseInt(req.query.quantity) || 1;
+    
+    db.get(`
+      SELECT stock_quantity, 
+             (stock_quantity >= ?) as in_stock
+      FROM ProductInventory
+      WHERE printing_id = ?
+    `, [quantity, printingId], (err, result) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      if (!result) {
+        return res.status(404).json({ error: 'Product not found' });
+      }
+      
+      res.json({
+        printing_id: printingId,
+        requested: quantity,
+        available: result.stock_quantity,
+        in_stock: result.in_stock === 1
+      });
+    });
+  });
+  
+  // Update inventory (decrease quantity)
+  app.post('/api/inventory/update', (req, res) => {
+    const { printing_id, quantity } = req.body;
+    
+    if (!printing_id || !quantity) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    
+    // First check if we have enough stock
+    db.get(`
+      SELECT stock_quantity
+      FROM ProductInventory
+      WHERE printing_id = ?
+    `, [printing_id], (err, result) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      if (!result) {
+        return res.status(404).json({ error: 'Product not found' });
+      }
+      
+      if (result.stock_quantity < quantity) {
+        return res.status(400).json({ 
+          error: 'Insufficient stock', 
+          requested: quantity, 
+          available: result.stock_quantity
+        });
+      }
+      
+      // Update the inventory
+      db.run(`
+        UPDATE ProductInventory
+        SET stock_quantity = stock_quantity - ?,
+            last_updated = datetime('now')
+        WHERE printing_id = ?
+      `, [quantity, printing_id], function(err) {
+        if (err) {
+          return res.status(500).json({ error: err.message });
+        }
+        
+        res.json({ 
+          success: true, 
+          message: 'Inventory updated',
+          printing_id,
+          quantity,
+          new_stock: result.stock_quantity - quantity
+        });
+      });
+    });
+  });
+  
+  // Get low stock items
+  app.get('/api/inventory/low-stock', (req, res) => {
+    const threshold = parseInt(req.query.threshold) || 5;
+    
+    db.all(`
+      SELECT pi.inventory_id, pi.printing_id, pi.stock_quantity, pi.last_updated,
+             p.set_id, p.edition, p.foiling, p.rarity,
+             c.name as card_name, c.card_id
+      FROM ProductInventory pi
+      JOIN Printings p ON pi.printing_id = p.printing_id
+      JOIN Cards c ON p.card_id = c.card_id
+      WHERE pi.stock_quantity <= ?
+      ORDER BY pi.stock_quantity ASC
+    `, [threshold], (err, items) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      res.json(items);
+    });
+  });
 
 // Start the server
 app.listen(port, () => {
