@@ -341,30 +341,7 @@ app.get('/api/cards/:id', (req, res) => {
 // Enhanced inventory endpoints for the backend
 
 // Get user inventory with additional card details
-app.get('/api/inventory/:userId', (req, res) => {
-    const userId = req.params.userId;
-    
-    const sql = `
-      SELECT ui.inventory_id, ui.card_id, ui.printing_id, ui.quantity, ui.condition, ui.purchase_price,
-             c.name as card_name, c.pitch, c.type_text, c.cost,
-             p.set_id, p.edition, p.foiling, p.rarity, p.image_url
-      FROM UserInventory ui
-      JOIN Cards c ON ui.card_id = c.card_id
-      JOIN Printings p ON ui.printing_id = p.printing_id
-      WHERE ui.user_id = ?
-      ORDER BY c.name
-    `;
-    
-    db.all(sql, [userId], (err, rows) => {
-      if (err) {
-        res.status(500).json({ error: err.message });
-        return;
-      }
-      
-      res.json(rows);
-    });
-  });
-  
+
   // Get inventory breakdowns/statistics
   app.get('/api/inventory/:userId/stats', (req, res) => {
     const userId = req.params.userId;
@@ -436,23 +413,67 @@ app.get('/api/inventory/:userId', (req, res) => {
       });
     });
   });
-// Add this to your backend app.js
+
+
+
 
 // Add card to user collection
-app.post('/api/collection/add', (req, res) => {
+app.get('/api/inventory/:userId', (req, res) => {
+    const userId = req.params.userId;
+    
+    const sql = `
+      SELECT ui.inventory_id, ui.card_id, ui.printing_id, ui.quantity, ui.condition, ui.purchase_price,
+             c.name as card_name, c.pitch, c.type_text, c.cost,
+             p.set_id, p.edition, p.foiling, p.rarity, p.image_url
+      FROM UserInventory ui
+      JOIN Cards c ON ui.card_id = c.card_id
+      JOIN Printings p ON ui.printing_id = p.printing_id
+      WHERE ui.user_id = ?
+      ORDER BY c.name
+    `;
+    
+    db.all(sql, [userId], (err, rows) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      // Ensure numeric price values before sending to client
+      const processedRows = rows.map(row => ({
+        ...row,
+        purchase_price: parseFloat(row.purchase_price) || 0,
+        // Pre-calculate total value to ensure consistency
+        total_value: (parseFloat(row.purchase_price) || 0) * (parseInt(row.quantity) || 0)
+      }));
+      
+      res.json(processedRows);
+    });
+  });
+  
+  // Update your /api/collection/add endpoint to ensure prices are numbers
+  app.post('/api/collection/add', (req, res) => {
     const { user_id, card_id, printing_id, quantity, condition, purchase_price } = req.body;
+    
+    console.log('Received collection add request:', req.body);
     
     if (!user_id || !card_id || !printing_id || !quantity) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
     
+    // CRITICAL FIX: Ensure purchase_price is a number
+    const finalPrice = typeof purchase_price === 'string' 
+      ? parseFloat(purchase_price) 
+      : (typeof purchase_price === 'number' ? purchase_price : 0);
+    
+    console.log('Normalized price:', finalPrice);
+    
     // Check if this card/printing already exists in user's collection
     db.get(`
-      SELECT inventory_id, quantity 
+      SELECT inventory_id, quantity, purchase_price 
       FROM UserInventory 
       WHERE user_id = ? AND card_id = ? AND printing_id = ?
     `, [user_id, card_id, printing_id], (err, existing) => {
       if (err) {
+        console.error('Database error:', err);
         return res.status(500).json({ error: err.message });
       }
       
@@ -460,15 +481,21 @@ app.post('/api/collection/add', (req, res) => {
         // Update existing entry
         const newQuantity = existing.quantity + quantity;
         
+        // Keep the original price if one wasn't provided
+        const newPrice = finalPrice > 0 ? finalPrice : existing.purchase_price;
+        
+        console.log('Updating existing entry with price:', newPrice);
+        
         db.run(`
           UPDATE UserInventory 
           SET quantity = ?, 
               condition = COALESCE(?, condition),
-              purchase_price = COALESCE(?, purchase_price),
+              purchase_price = ?,
               date_acquired = datetime('now')
           WHERE inventory_id = ?
-        `, [newQuantity, condition, purchase_price, existing.inventory_id], function(err) {
+        `, [newQuantity, condition, newPrice, existing.inventory_id], function(err) {
           if (err) {
+            console.error('Update error:', err);
             return res.status(500).json({ error: err.message });
           }
           
@@ -476,23 +503,28 @@ app.post('/api/collection/add', (req, res) => {
             success: true,
             message: 'Card quantity updated in collection',
             inventory_id: existing.inventory_id,
-            new_quantity: newQuantity
+            new_quantity: newQuantity,
+            purchase_price: newPrice
           });
         });
       } else {
-        // Create new entry
+        // Create new entry with the provided price or default to 0
+        console.log('Creating new entry with price:', finalPrice);
+        
         db.run(`
           INSERT INTO UserInventory (user_id, card_id, printing_id, quantity, condition, purchase_price, date_acquired)
           VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-        `, [user_id, card_id, printing_id, quantity, condition || 'Near Mint', purchase_price || 0], function(err) {
+        `, [user_id, card_id, printing_id, quantity, condition || 'Near Mint', finalPrice], function(err) {
           if (err) {
+            console.error('Insert error:', err);
             return res.status(500).json({ error: err.message });
           }
           
           res.json({
             success: true,
             message: 'Card added to collection',
-            inventory_id: this.lastID
+            inventory_id: this.lastID,
+            purchase_price: finalPrice
           });
         });
       }
@@ -624,7 +656,82 @@ app.get('/api/inventory/printing/:printingId', (req, res) => {
     });
   });
 
+
+// Add these endpoints to your app.js API file
+
+// Update quantity in collection
+app.post('/api/collection/update', (req, res) => {
+    const { inventory_id, quantity, user_id } = req.body;
+    
+    if (!inventory_id || !quantity || !user_id) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    
+    // Ensure quantity is valid
+    if (quantity < 1) {
+      return res.status(400).json({ error: 'Quantity must be at least 1' });
+    }
+    
+    // Update the inventory entry
+    db.run(`
+      UPDATE UserInventory 
+      SET quantity = ?, 
+          date_acquired = datetime('now')
+      WHERE inventory_id = ? AND user_id = ?
+    `, [quantity, inventory_id, user_id], function(err) {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      if (this.changes === 0) {
+        return res.status(404).json({ error: 'Inventory entry not found or not owned by user' });
+      }
+      
+      res.json({
+        success: true,
+        message: 'Quantity updated',
+        inventory_id: inventory_id,
+        new_quantity: quantity
+      });
+    });
+  });
+  
+  // Remove card from collection
+  app.post('/api/collection/remove', (req, res) => {
+    const { inventory_id, user_id } = req.body;
+    
+    if (!inventory_id || !user_id) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    
+    // Delete the inventory entry
+    db.run(`
+      DELETE FROM UserInventory 
+      WHERE inventory_id = ? AND user_id = ?
+    `, [inventory_id, user_id], function(err) {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      if (this.changes === 0) {
+        return res.status(404).json({ error: 'Inventory entry not found or not owned by user' });
+      }
+      
+      res.json({
+        success: true,
+        message: 'Card removed from collection',
+        inventory_id: inventory_id
+      });
+    });
+  });
+
+
+
+
 // Start the server
 app.listen(port, () => {
   console.log(`API server running at http://localhost:${port}`);
 });
+
+
+

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link, useParams, useSearchParams, useNavigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link, useParams, useSearchParams, useNavigate,useLocation } from 'react-router-dom';
 import AdvancedSearch from './AdvancedSearch';
 import './App.css';
 import FilterSidebar from './FilterSidebar';
@@ -382,6 +382,7 @@ function SearchPage() {
 
 
 // Card Preview Component
+// Full CardPreview Component with fixed collection functionality
 function CardPreview({ card }) {
   const [inCart, setInCart] = useState(false);
   const [addedToCollection, setAddedToCollection] = useState(false);
@@ -390,10 +391,22 @@ function CardPreview({ card }) {
   const [stockError, setStockError] = useState(null);
   const [collectionError, setCollectionError] = useState(null);
   
+  // Cache the price to keep it stable
+  const [cardPrice] = useState(() => {
+    const baseCost = parseFloat(card.cost || '0');
+    // Add 5-25 dollars based on cost value with stable randomization
+    const cardId = parseInt(card.card_id) || 0;
+    const randomFactor = ((cardId % 100) / 100) * 20; // 0-20 range based on card_id
+    return (baseCost + 5 + randomFactor).toFixed(2);
+  });
+  
   useEffect(() => {
     // Find the first printing ID for this card
     if (card.image_url) {
-      const printingId = card.image_url.split('/').pop().split('.')[0];
+      const pathParts = card.image_url.split('/');
+      const fileNameWithExt = pathParts[pathParts.length - 1];
+      const printingId = fileNameWithExt.split('.')[0];
+      
       if (printingId) {
         // Fetch inventory for this printing
         fetch(`${API_URL}/inventory/check/${printingId}`)
@@ -434,12 +447,8 @@ function CardPreview({ card }) {
     }
   };
   
-  // Generate a price based on card cost or rarity
-  const getPrice = () => {
-    const baseCost = parseFloat(card.cost || '0');
-    // Add 5-25 dollars based on cost value
-    return (baseCost + 5 + Math.random() * 20).toFixed(2);
-  };
+  // Use the cached price instead of recalculating
+  const getPrice = () => cardPrice;
   
   const handleAddToCart = (e) => {
     e.preventDefault(); // Prevent navigation to card detail
@@ -459,59 +468,81 @@ function CardPreview({ card }) {
       setStockError(null);
     }, 1500);
   };
+  // Check the area around line 479 in your code and replace with this fixed version:
+
+const handleAddToCollection = (e) => {
+  e.preventDefault(); // Prevent navigation to card detail
   
-  const handleAddToCollection = (e) => {
-    e.preventDefault(); // Prevent navigation to card detail
-    
-    // Get printing ID from image URL
-    if (!card.image_url) {
-      setCollectionError('Cannot add to collection');
-      return;
-    }
-    
-    const printingId = card.image_url.split('/').pop().split('.')[0];
-    if (!printingId) {
-      setCollectionError('Cannot add to collection');
-      return;
-    }
-    
-    const price = parseFloat(getPrice());
-    
-    // Call the collection add API
-    fetch(`${API_URL}/collection/add`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        user_id: 1, // Using a default user ID, in a real app you'd get this from auth
-        card_id: card.card_id,
-        printing_id: printingId,
-        quantity: 1, // Add 1 by default in the preview
-        condition: 'Near Mint',
-        purchase_price: price
-      })
+  // Log debug info
+  console.log("Adding to collection:", card);
+  
+  // Get printing ID from image URL
+  if (!card.image_url) {
+    setCollectionError('Cannot add to collection');
+    return;
+  }
+  
+  // Extract printing ID more reliably
+  const pathParts = card.image_url.split('/');
+  const fileNameWithExt = pathParts[pathParts.length - 1];
+  const printingId = fileNameWithExt.split('.')[0];
+  
+  console.log("Printing ID:", printingId);
+  
+  if (!printingId) {
+    setCollectionError('Cannot add to collection');
+    return;
+  }
+  
+  // Ensure price is a number
+  const price = parseFloat(getPrice());
+  
+  console.log("Card price:", price);
+  
+  // Call the collection add API
+  fetch(`${API_URL}/collection/add`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      user_id: 1, // Using a default user ID, in a real app you'd get this from auth
+      card_id: card.card_id,
+      printing_id: printingId,
+      quantity: 1, // Add 1 by default in the preview
+      condition: 'Near Mint',
+      purchase_price: price
     })
-    .then(response => {
-      if (!response.ok) {
-        return response.json().then(data => {
+  })
+  .then(response => {
+    if (!response.ok) {
+      return response.text().then(text => {
+        try {
+          // Try to parse as JSON
+          const data = JSON.parse(text);
           throw new Error(data.error || 'Error adding to collection');
-        });
-      }
-      return response.json();
-    })
-    .then(data => {
-      // Update was successful
-      setAddedToCollection(true);
-      setTimeout(() => setAddedToCollection(false), 1500);
-      setCollectionError(null);
-    })
-    .catch(error => {
-      console.error('Collection error:', error);
-      setCollectionError('Error adding to collection');
-      setTimeout(() => setCollectionError(null), 3000);
-    });
-  };
+        } catch (e) {
+          // If it's not JSON, use the text or a default error
+          throw new Error(text || 'Error adding to collection');
+        }
+      });
+    }
+    return response.json();
+  })
+  .then(data => {
+    console.log("Success response:", data);
+    // Update was successful
+    setAddedToCollection(true);
+    setTimeout(() => setAddedToCollection(false), 1500);
+    setCollectionError(null);
+  })
+  .catch(error => {
+    console.error('Collection error:', error);
+    setCollectionError(error.message || 'Error adding to collection');
+    setTimeout(() => setCollectionError(null), 3000);
+  });
+};
+  
   
   const price = getPrice();
   const isInStock = inventory && inventory.in_stock;
@@ -571,15 +602,9 @@ function CardPreview({ card }) {
 }
 
 // Add this inside your CardDetailPage component
-const getCardColor = (pitch) => {
-  switch(pitch) {
-    case '1': return 'red-card';
-    case '2': return 'yellow-card';
-    case '3': return 'blue-card';
-    default: return 'grey-card';
-  }
-};
+
 // Card Detail with Store Features
+// Full CardDetailPage Component with fixed collection functionality
 function CardDetailPage() {
   const { cardId } = useParams();
   const [card, setCard] = useState(null);
@@ -591,6 +616,7 @@ function CardDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [stockError, setStockError] = useState(null);
+  const [collectionError, setCollectionError] = useState(null);
   
   useEffect(() => {
     fetch(`${API_URL}/cards/${cardId}`)
@@ -642,6 +668,7 @@ function CardDetailPage() {
     setSelectedPrinting(printing);
     fetchInventory(printing.printing_id);
     setStockError(null); // Clear any previous errors
+    setCollectionError(null); // Clear any previous errors
     setAddedToCollection(false); // Reset collection status
   };
   
@@ -661,11 +688,18 @@ function CardDetailPage() {
       }
     }
     
-    // Add randomness for variation but keep it stable for this session
-    const randomFactor = ((parseInt(cardId) % 20) + 100) / 100;
+    // Add randomness for variation but keep it stable for this card
+    // Use card_id as seed for deterministic randomness
+    const cardIdNum = parseInt(cardId) || 0;
+    const randomFactor = ((cardIdNum % 20) + 100) / 100;
     price *= randomFactor;
     
-    return price.toFixed(2);
+    // Store the price as a property on the card object for consistency
+    if (!card.calculatedPrice) {
+      card.calculatedPrice = price.toFixed(2);
+    }
+    
+    return card.calculatedPrice;
   };
   
   const handleAddToCart = () => {
@@ -716,9 +750,17 @@ function CardDetailPage() {
   };
   
   const handleAddToCollection = () => {
-    if (!selectedPrinting || !card) return;
+    if (!selectedPrinting || !card) {
+      setCollectionError('Unable to add to collection');
+      return;
+    }
     
-    const price = parseFloat(getPrice());
+    // Use the stored price or calculate it
+    const price = parseFloat(card.calculatedPrice || getPrice());
+    
+    console.log("Adding to collection with price:", price);
+    console.log("Card ID:", card.card_id);
+    console.log("Printing ID:", selectedPrinting.printing_id);
     
     // Call the collection add API
     fetch(`${API_URL}/collection/add`, {
@@ -737,20 +779,30 @@ function CardDetailPage() {
     })
     .then(response => {
       if (!response.ok) {
-        return response.json().then(data => {
-          throw new Error(data.error || 'Error adding to collection');
+        return response.text().then(text => {
+          try {
+            // Try to parse as JSON
+            const data = JSON.parse(text);
+            throw new Error(data.error || 'Error adding to collection');
+          } catch (e) {
+            // If it's not JSON, use the text or a default error
+            throw new Error(text || 'Error adding to collection');
+          }
         });
       }
       return response.json();
     })
     .then(data => {
+      console.log("Success response:", data);
       // Update was successful
       setAddedToCollection(true);
+      setCollectionError(null);
       setTimeout(() => setAddedToCollection(false), 1500);
     })
     .catch(error => {
       console.error('Collection error:', error);
-      alert('Error adding to collection: ' + error.message);
+      setCollectionError(error.message || 'Error adding to collection');
+      setTimeout(() => setCollectionError(null), 3000);
     });
   };
   
@@ -843,6 +895,12 @@ function CardDetailPage() {
               </div>
             )}
             
+            {collectionError && (
+              <div className="stock-error">
+                {collectionError}
+              </div>
+            )}
+            
             <div className="action-buttons">
               <button 
                 className="add-to-cart-btn" 
@@ -927,27 +985,45 @@ function CardDetailPage() {
     </div>
   );
 }
+  
+
 // Inventory Page Component
+// Import statements should be at the top of your file
+
 function InventoryPage() {
   const { userId } = useParams();
+  const location = useLocation();
   const [inventory, setInventory] = useState([]);
   const [filteredInventory, setFilteredInventory] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [activeFilters, setActiveFilters] = useState({});
-  const [breakdown, setBreakdown] = useState({ byRarity: {}, byType: {}, byPitch: {} });
+  const [editItem, setEditItem] = useState(null);
+  const [editQuantity, setEditQuantity] = useState(1);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteItemId, setDeleteItemId] = useState(null);
+  const [breakdown, setBreakdown] = useState({ 
+    byRarity: {}, 
+    byType: {}, 
+    byPitch: {} 
+  });
   
   useEffect(() => {
     fetchInventory();
-  }, [userId]);
+  }, [userId, location]);
   
   useEffect(() => {
     if (inventory.length > 0) {
       applyFilters();
-      calculateBreakdown();
     }
   }, [inventory, activeFilters]);
+  
+  useEffect(() => {
+    if (filteredInventory.length > 0) {
+      calculateBreakdown();
+    }
+  }, [filteredInventory]);
   
   const fetchInventory = () => {
     setIsLoading(true);
@@ -960,13 +1036,16 @@ function InventoryPage() {
         return response.json();
       })
       .then(data => {
-        // Enhance each item with additional data
         const enhancedData = data.map(item => ({
           ...item,
-          total_value: item.purchase_price * item.quantity,
+          // Ensure purchase_price is a number
+          purchase_price: parseFloat(item.purchase_price) || 0,
+          // Calculate total_value based on numeric purchase_price
+          total_value: (parseFloat(item.purchase_price) || 0) * item.quantity,
           pitch_class: getPitchClass(item.pitch)
         }));
         
+        console.log('Inventory data with prices:', enhancedData);
         setInventory(enhancedData);
         setFilteredInventory(enhancedData);
         setIsLoading(false);
@@ -986,10 +1065,109 @@ function InventoryPage() {
     }
   };
   
+  const handleDeleteAction = (inventoryId) => {
+    setDeleteItemId(inventoryId);
+    setShowDeleteConfirm(true);
+  };
+  
+  const confirmDelete = () => {
+    if (!deleteItemId) return;
+    
+    fetch(`${API_URL}/collection/remove`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        inventory_id: deleteItemId,
+        user_id: userId
+      })
+    })
+    .then(response => {
+      if (!response.ok) {
+        throw new Error('Failed to remove card');
+      }
+      return response.json();
+    })
+    .then(data => {
+      // Remove item from local state
+      const updatedInventory = inventory.filter(item => item.inventory_id !== deleteItemId);
+      setInventory(updatedInventory);
+      
+      // Reset delete state
+      cancelDelete();
+    })
+    .catch(error => {
+      console.error('Error removing card:', error);
+      alert('Failed to remove card from collection');
+      cancelDelete();
+    });
+  };
+  
+  const cancelDelete = () => {
+    setShowDeleteConfirm(false);
+    setDeleteItemId(null);
+  };
+  
+  const handleEditClick = (item) => {
+    setEditItem(item);
+    setEditQuantity(item.quantity);
+  };
+  
+  const handleSaveEdit = () => {
+    if (!editItem) return;
+    
+    fetch(`${API_URL}/collection/update`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        inventory_id: editItem.inventory_id,
+        user_id: userId,
+        quantity: editQuantity
+      })
+    })
+    .then(response => {
+      if (!response.ok) {
+        throw new Error('Failed to update quantity');
+      }
+      return response.json();
+    })
+    .then(data => {
+      // Update item in local state with correct price calculation
+      const updatedInventory = inventory.map(item => {
+        if (item.inventory_id === editItem.inventory_id) {
+          const price = parseFloat(item.purchase_price) || 0;
+          return {
+            ...item,
+            quantity: editQuantity,
+            total_value: price * editQuantity
+          };
+        }
+        return item;
+      });
+      
+      setInventory(updatedInventory);
+      
+      // Reset edit state
+      setEditItem(null);
+      setEditQuantity(1);
+    })
+    .catch(error => {
+      console.error('Error updating quantity:', error);
+      alert('Failed to update quantity');
+    });
+  };
+  
+  const handleCancelEdit = () => {
+    setEditItem(null);
+    setEditQuantity(1);
+  };
+  
   const applyFilters = () => {
     let filtered = [...inventory];
     
-    // Apply active filters
     if (activeFilters.cardClass) {
       filtered = filtered.filter(item => 
         item.type_text && item.type_text.includes(activeFilters.cardClass)
@@ -1034,24 +1212,29 @@ function InventoryPage() {
     const byType = {};
     const byPitch = {};
     
-    // Only calculate breakdowns on the filtered inventory
     filteredInventory.forEach(item => {
-      // Breakdown by rarity
-      byRarity[item.rarity] = byRarity[item.rarity] || { count: 0, value: 0 };
-      byRarity[item.rarity].count += item.quantity;
-      byRarity[item.rarity].value += item.total_value;
+      // Ensure price is a number
+      const price = parseFloat(item.purchase_price) || 0;
+      const quantity = parseInt(item.quantity) || 0;
+      const itemValue = price * quantity;
       
-      // Breakdown by card type (use main type)
+      // Breakdown by rarity
+      const rarityKey = item.rarity || 'Unknown';
+      byRarity[rarityKey] = byRarity[rarityKey] || { count: 0, value: 0 };
+      byRarity[rarityKey].count += quantity;
+      byRarity[rarityKey].value += itemValue;
+      
+      // Breakdown by card type
       const mainType = item.type_text ? item.type_text.split(' ')[0] : 'Unknown';
       byType[mainType] = byType[mainType] || { count: 0, value: 0 };
-      byType[mainType].count += item.quantity;
-      byType[mainType].value += item.total_value;
+      byType[mainType].count += quantity;
+      byType[mainType].value += itemValue;
       
       // Breakdown by pitch
       const pitchKey = item.pitch || 'Unknown';
       byPitch[pitchKey] = byPitch[pitchKey] || { count: 0, value: 0 };
-      byPitch[pitchKey].count += item.quantity;
-      byPitch[pitchKey].value += item.total_value;
+      byPitch[pitchKey].count += quantity;
+      byPitch[pitchKey].value += itemValue;
     });
     
     setBreakdown({ byRarity, byType, byPitch });
@@ -1068,9 +1251,13 @@ function InventoryPage() {
   if (isLoading) return <div className="loading">Loading your collection...</div>;
   if (error) return <div className="error">Error: {error}</div>;
   
-  // Calculate collection stats
-  const totalCards = filteredInventory.reduce((sum, item) => sum + item.quantity, 0);
-  const totalValue = filteredInventory.reduce((sum, item) => sum + item.total_value, 0);
+  // Calculate collection stats with proper price handling
+  const totalCards = filteredInventory.reduce((sum, item) => sum + (parseInt(item.quantity) || 0), 0);
+  const totalValue = filteredInventory.reduce((sum, item) => {
+    const price = parseFloat(item.purchase_price) || 0;
+    const quantity = parseInt(item.quantity) || 0;
+    return sum + (price * quantity);
+  }, 0);
   const uniqueCards = filteredInventory.length;
   
   return (
@@ -1119,11 +1306,11 @@ function InventoryPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {Object.entries(breakdown.byRarity).map(([rarity, data]) => (
+                      {Object.entries(breakdown.byRarity || {}).map(([rarity, data]) => (
                         <tr key={`rarity-${rarity}`}>
                           <td>{rarity || 'Unknown'}</td>
-                          <td>{data.count}</td>
-                          <td>${data.value.toFixed(2)}</td>
+                          <td>{data.count || 0}</td>
+                          <td>${(data.value || 0).toFixed(2)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1141,11 +1328,11 @@ function InventoryPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {Object.entries(breakdown.byType).map(([type, data]) => (
+                      {Object.entries(breakdown.byType || {}).map(([type, data]) => (
                         <tr key={`type-${type}`}>
                           <td>{type}</td>
-                          <td>{data.count}</td>
-                          <td>${data.value.toFixed(2)}</td>
+                          <td>{data.count || 0}</td>
+                          <td>${(data.value || 0).toFixed(2)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1163,11 +1350,11 @@ function InventoryPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {Object.entries(breakdown.byPitch).map(([pitch, data]) => (
+                      {Object.entries(breakdown.byPitch || {}).map(([pitch, data]) => (
                         <tr key={`pitch-${pitch}`} className={`pitch-${pitch.toLowerCase()}-row`}>
                           <td>{pitch}</td>
-                          <td>{data.count}</td>
-                          <td>${data.value.toFixed(2)}</td>
+                          <td>{data.count || 0}</td>
+                          <td>${(data.value || 0).toFixed(2)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1190,7 +1377,7 @@ function InventoryPage() {
                     <th>Quantity</th>
                     <th>Condition</th>
                     <th>Price</th>
-                    <th>Total</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1203,10 +1390,68 @@ function InventoryPage() {
                       </td>
                       <td>{item.set_id}</td>
                       <td>{item.foiling}</td>
-                      <td>{item.quantity}</td>
+                      <td>
+                        {editItem && editItem.inventory_id === item.inventory_id ? (
+                          <div className="quantity-editor">
+                            <button 
+                              className="quantity-btn"
+                              onClick={() => setEditQuantity(Math.max(1, editQuantity - 1))}
+                            >
+                              -
+                            </button>
+                            <input 
+                              type="number" 
+                              min="1"
+                              value={editQuantity} 
+                              onChange={(e) => setEditQuantity(parseInt(e.target.value) || 1)}
+                              className="quantity-input"
+                            />
+                            <button 
+                              className="quantity-btn"
+                              onClick={() => setEditQuantity(editQuantity + 1)}
+                            >
+                              +
+                            </button>
+                          </div>
+                        ) : (
+                          item.quantity
+                        )}
+                      </td>
                       <td>{item.condition}</td>
-                      <td>${parseFloat(item.purchase_price).toFixed(2)}</td>
-                      <td>${item.total_value.toFixed(2)}</td>
+                      <td>${(parseFloat(item.purchase_price) || 0).toFixed(2)}</td>
+                      <td>
+                        {editItem && editItem.inventory_id === item.inventory_id ? (
+                          <div className="action-buttons">
+                            <button 
+                              className="save-btn" 
+                              onClick={handleSaveEdit}
+                            >
+                              Save
+                            </button>
+                            <button 
+                              className="cancel-btn" 
+                              onClick={handleCancelEdit}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="action-buttons">
+                            <button 
+                              className="edit-btn" 
+                              onClick={() => handleEditClick(item)}
+                            >
+                              Edit
+                            </button>
+                            <button 
+                              className="delete-btn" 
+                              onClick={() => handleDeleteAction(item.inventory_id)}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1228,8 +1473,23 @@ function InventoryPage() {
           )}
         </div>
       </div>
+      
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="delete-modal">
+          <div className="delete-modal-content">
+            <h3>Confirm Deletion</h3>
+            <p>Are you sure you want to remove this card from your collection?</p>
+            <div className="delete-modal-buttons">
+              <button className="confirm-delete-btn" onClick={confirmDelete}>Delete</button>
+              <button className="cancel-delete-btn" onClick={cancelDelete}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
 
 export default App;
